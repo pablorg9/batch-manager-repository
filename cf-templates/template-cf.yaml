@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+
+  # ====================== SQS Queue
+
+  IntegrationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: integrationQueue.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      DelaySeconds: 15
+      VisibilityTimeout: 36000
+
+  # ====================== Lambda Function for publishSQS
+
+  PublishSQSLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-publishSQSLambda
+      Handler: index.handler
+      Role: !GetAtt PublishLambdaRole.Arn
+      Code:
+        S3Bucket: !ImportValue LambdaCodeBucketName
+        S3Key: publishSQSLambda.zip
+      Runtime: nodejs20.x
+      Environment:
+        Variables:
+          INTEGRATION_SQS: !Ref IntegrationQueue
+      MemorySize: 128
+      Timeout: 60
+
+  PublishSQSLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PublishSQSLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/publishSQS
+
+  # ====================== API Gateway
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: LambdaApi
+
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      RestApiId: !Ref ApiGatewayRestApi
+      DeploymentId: !Ref ApiGatewayDeployment
+      MethodSettings:
+        - DataTraceEnabled: true
+          HttpMethod: "*"
+          ResourcePath: "/*"
+          LoggingLevel: INFO
+          MetricsEnabled: true
+  
+  ApiGatewayAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn:
+        Fn::GetAtt:
+          - ApiGatewayCloudWatchRole
+          - Arn
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PublishSQSApiMethod
+      - PublishSQSOptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: dummyStage
+  
+  PublishSQSApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: publishSQS
+      RestApiId: !Ref ApiGatewayRestApi
+  
+  PublishSQSApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref PublishSQSApiResource
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: 
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PublishSQSLambda.Arn}/invocations
+
+  PublishSQSOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref PublishSQSApiResource
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+            ResponseTemplates:
+              application/json: '{"statusCode": 200}'
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+
+  # ====================== IAM Roles
+
+  PublishLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaSQSSendMessagePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'sqs:SendMessage'
+                Resource: !GetAtt IntegrationQueue.Arn
+
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: "apigateway.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies: 
+        - PolicyName: "ApiGatewayLoggingPolicy"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: "Allow"
+                Action: 
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:DescribeLogGroups"
+                  - "logs:DescribeLogStreams"
+                  - "logs:PutLogEvents"
+                  - "logs:GetLogEvents"
+                  - "logs:FilterLogEvents"
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/*"
+
+Outputs:
+  StackName:
+    Description: StackName
+    Value: !Ref AWS::StackName
+  QueueUrl:
+    Description: "URL for the SQS Queue"
+    Value: !Ref IntegrationQueue
+  ApiUrl:
+    Description: "URL del API Gateway"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"

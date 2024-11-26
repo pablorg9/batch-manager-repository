@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation template to create an S3 bucket for Lambda code storage"
+
+Parameters:
+  IAMUserName:
+    Description: "ARN of the IAM User allowed to access the bucket."
+    Type: String
+
+Resources:
+  LambdaCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "batch-manager-${AWS::StackName}"
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: ExpireIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  LambdaCodeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LambdaCodeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAccountAccess
+            Effect: Allow
+            Principal: 
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUserName}"
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+              - "s3:ListBucket"
+            Resource:
+              - !Sub "arn:aws:s3:::${LambdaCodeBucket}"
+              - !Sub "arn:aws:s3:::${LambdaCodeBucket}/*"
+
+Outputs:
+  BucketName:
+    Description: "The name of the S3 bucket created for Lambda code storage."
+    Value: !Ref LambdaCodeBucket
+    Export:
+      Name: LambdaCodeBucketName
+
+  BucketArn:
+    Description: "The ARN of the S3 bucket."
+    Value: !GetAtt LambdaCodeBucket.Arn
+    Export:
+      Name: LambdaCodeBucketArn
