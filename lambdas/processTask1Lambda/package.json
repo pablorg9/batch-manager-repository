@@ -1,5 +1,5 @@
 {
-  "name": "updatebatchlambda",
+  "name": "processtask1lambda",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -9,7 +9,5 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "@aws-sdk/client-sqs": "^3.614.0"
-  }
+  "dependencies": {}
 }

@@ -13,7 +13,7 @@ const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const sfnClient = new SFNClient();
 
 export const handler = async (event) => {
-    const {batchId, totalItems, batchSize, currentBatch, items} = JSON.parse(event.body);
+    const {batchId, totalItems, batchSize, currentBatch, itemIds} = JSON.parse(event.body);
 
     try {
         if (currentBatch === 1) {
@@ -36,12 +36,12 @@ export const handler = async (event) => {
             await docClient.send(batchCommand);
         }
     
-        const putRequests = items.map((item) => ({
+        const putRequests = itemIds.map((itemId) => ({
             PutRequest: {
                 Item: {
                     requestId: uuidv4(),
                     batchId: batchId,
-                    item: item,
+                    itemId: itemId,
                     message: {},
                     status: 'CREATED',
                     timestamp: Date.now(),
@@ -60,12 +60,12 @@ export const handler = async (event) => {
         const sfnParams = {
             stateMachineArn: process.env.STATE_MACHINE_ARN,
             input: JSON.stringify({
-                items: items,
+                itemIds: itemIds,
                 batchId: batchId,
                 currentBatch: currentBatch,
                 requestsId: putRequests.map((request) => ({
                     requestId: request.PutRequest.Item.requestId,
-                    item: request.PutRequest.Item.item,
+                    itemId: request.PutRequest.Item.itemId,
                 })),
             }),
         };
