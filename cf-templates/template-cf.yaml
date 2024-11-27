@@ -1,42 +1,28 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Resources:
 
-  # ====================== SQS Queue
+  # ====================== Lambda Function for StateMachineInit
 
-  IntegrationQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: integrationQueue.fifo
-      FifoQueue: true
-      ContentBasedDeduplication: false
-      DelaySeconds: 15
-      VisibilityTimeout: 36000
-
-  # ====================== Lambda Function for publishSQS
-
-  PublishSQSLambda:
+  StateMachineInitLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-publishSQSLambda
+      FunctionName: !Sub ${AWS::StackName}-stateMachineInitLambda
       Handler: index.handler
-      Role: !GetAtt PublishLambdaRole.Arn
+      Role: !GetAtt StateMachineInitLambdaRole.Arn
       Code:
         S3Bucket: !ImportValue LambdaCodeBucketName
-        S3Key: publishSQSLambda.zip
+        S3Key: stateMachineInitLambda.zip
       Runtime: nodejs20.x
-      Environment:
-        Variables:
-          INTEGRATION_SQS: !Ref IntegrationQueue
       MemorySize: 128
       Timeout: 60
 
-  PublishSQSLambdaInvokePermission:
+  StateMachineInitLambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref PublishSQSLambda
+      FunctionName: !Ref StateMachineInitLambda
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/publishSQS
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/stateMachineInit
 
   # ====================== API Gateway
   ApiGatewayRestApi:
@@ -68,38 +54,38 @@ Resources:
   ApiGatewayDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
-      - PublishSQSApiMethod
-      - PublishSQSOptionsMethod
+      - StateMachineInitApiMethod
+      - StateMachineInitOptionsMethod
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       StageName: dummyStage
   
-  PublishSQSApiResource:
+  StateMachineInitApiResource:
     Type: AWS::ApiGateway::Resource
     Properties:
       ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
-      PathPart: publishSQS
+      PathPart: stateMachineInit
       RestApiId: !Ref ApiGatewayRestApi
   
-  PublishSQSApiMethod:
+  StateMachineInitApiMethod:
     Type: AWS::ApiGateway::Method
     Properties:
       AuthorizationType: NONE
       HttpMethod: POST
-      ResourceId: !Ref PublishSQSApiResource
+      ResourceId: !Ref StateMachineInitApiResource
       RestApiId: !Ref ApiGatewayRestApi
       Integration:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
         Uri: 
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PublishSQSLambda.Arn}/invocations
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StateMachineInitLambda.Arn}/invocations
 
-  PublishSQSOptionsMethod:
+  StateMachineInitOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
       AuthorizationType: NONE
       HttpMethod: OPTIONS
-      ResourceId: !Ref PublishSQSApiResource
+      ResourceId: !Ref StateMachineInitApiResource
       RestApiId: !Ref ApiGatewayRestApi
       Integration:
         IntegrationResponses:
@@ -122,7 +108,7 @@ Resources:
 
   # ====================== IAM Roles
 
-  PublishLambdaRole:
+  StateMachineInitLambdaRole:
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
@@ -134,15 +120,6 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: LambdaSQSSendMessagePolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: 'Allow'
-                Action:
-                  - 'sqs:SendMessage'
-                Resource: !GetAtt IntegrationQueue.Arn
 
   ApiGatewayCloudWatchRole:
     Type: AWS::IAM::Role
@@ -175,9 +152,6 @@ Outputs:
   StackName:
     Description: StackName
     Value: !Ref AWS::StackName
-  QueueUrl:
-    Description: "URL for the SQS Queue"
-    Value: !Ref IntegrationQueue
   ApiUrl:
     Description: "URL del API Gateway"
     Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
