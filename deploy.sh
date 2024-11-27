@@ -12,15 +12,15 @@ if [ $BUILD == "build" ]; then
 
     for lambdaDir in lambdas/*; do
         if [ -d "$lambdaDir" ]; then
-            lambdaName=$(basename "$lambdaDir") # Obtener el nombre de la carpeta
-            cd "$lambdaDir" # Cambiar al directorio de la Lambda
-            zip -r "../../dist/${lambdaName}.zip" . >/dev/null # Crear el ZIP sin incluir la estructura superior
+            lambdaName=$(basename "$lambdaDir")
+            cd "$lambdaDir"
+            zip -r "../../dist/${lambdaName}.zip" . >/dev/null
             echo "zipped: ${lambdaName}.zip"
-            cd - >/dev/null # Regresar al directorio original
+            cd - >/dev/null
         fi
     done
 
-    aws s3 cp ./dist s3://${BUCKET_NAME}/ --recursive --profile personal
+    aws s3 cp ./dist s3://${BUCKET_NAME}/ --recursive
 fi
 
 if [ $DEPLOY_TYPE == "lambdas" ]; then
@@ -30,8 +30,7 @@ if [ $DEPLOY_TYPE == "lambdas" ]; then
         aws lambda update-function-code \
             --function-name "${STACK_NAME}-${lambdaName}" \
             --s3-bucket "${BUCKET_NAME}" \
-            --s3-key "${lambdaName}.zip" \
-            --profile personal
+            --s3-key "${lambdaName}.zip"
         echo "Lambda deployed: ${lambdaName}"
     done
 else
@@ -39,6 +38,5 @@ else
     aws cloudformation deploy \
       --stack-name $STACK_NAME \
       --template-file ./cf-templates/template-cf.yaml \
-      --profile personal \
       --capabilities CAPABILITY_NAMED_IAM
 fi
