@@ -63,12 +63,11 @@ async function updateMultipleRecords(tableName, requestData) {
     return Promise.all(updatePromises);
 }
 
-const getItemByKey = async (tableName, primaryKey, primaryKeyValue, rangeKey, rangeKeyValue) => {
+const getItemByKey = async (tableName, primaryKey, primaryKeyValue) => {
     const getParams = {
         TableName: tableName,
         Key: {
-            [primaryKey]: primaryKeyValue,
-            [rangeKey]: rangeKeyValue
+            [primaryKey]: primaryKeyValue
         }
     };
 
@@ -92,7 +91,7 @@ export const handler = async (event) => {
             batchId
         };
 
-        const getBatch = await getItemByKey(process.env.BATCH_TABLE, 'batchId', batchId, 'shop', shop);
+        const getBatch = await getItemByKey(process.env.BATCH_TABLE, 'batchId', batchId);
         let status = 'RUNNING';
         let incrementCurrentBatch = 1;
 
@@ -108,7 +107,7 @@ export const handler = async (event) => {
             ':incrementCurrentBatch': incrementCurrentBatch,
             ':failedRequestItems': failedItems.map((item) => item.itemId),
             ':totalFailedItems': failedItems.length,
-            ':totalSuccessItems': !products.length ? 0 : (products.length - failedItems.length),
+            ':totalSuccessItems': !itemIds.length ? 0 : (itemIds.length - failedItems.length),
         };
         const singleExpressionAttributeNames = {
             '#st': 'status',

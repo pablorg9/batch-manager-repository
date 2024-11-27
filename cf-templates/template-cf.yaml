@@ -12,6 +12,11 @@ Resources:
       Code:
         S3Bucket: !ImportValue LambdaCodeBucketName
         S3Key: stateMachineInitLambda.zip
+      Environment:
+        Variables:
+          BATCH_TABLE: !Ref BatchTable
+          REQUEST_TABLE: !Ref RequestTable
+          STATE_MACHINE_ARN: !Ref StateMachine
       Runtime: nodejs20.x
       MemorySize: 128
       Timeout: 60
@@ -24,20 +29,46 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/stateMachineInit
 
-  GetProductsLambda:
+  ProcessTask1Lambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-getProductsLambda
+      FunctionName: !Sub ${AWS::StackName}-processTask1Lambda
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        S3Bucket: indbox-lambdas
-        S3Key: getProductsLambda.zip
+        S3Bucket: !ImportValue LambdaCodeBucketName
+        S3Key: processTask1Lambda.zip
+      Runtime: nodejs20.x
+      MemorySize: 128
+      Timeout: 60
+
+  ProcessTask2Lambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-processTask2Lambda
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !ImportValue LambdaCodeBucketName
+        S3Key: processTask2Lambda.zip
+      Runtime: nodejs20.x
+      MemorySize: 128
+      Timeout: 60
+
+  UpdateBatchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-updateBatchLambda
+      Handler: index.handler
+      Role: !GetAtt UpdateBatchLambdaRole.Arn
+      Code:
+        S3Bucket: !ImportValue LambdaCodeBucketName
+        S3Key: updateBatchLambda.zip
       Runtime: nodejs20.x
       Environment:
         Variables:
-          INDBOX_API_HOST: "https://api.indbox.co:4000"
-          INDBOX_SECURITY_MS_HOST: "https://api.indbox.co:4001"
+          BATCH_TABLE: !Ref BatchTable
+          REQUEST_TABLE: !Ref RequestTable
       MemorySize: 128
       Timeout: 60
 
@@ -149,12 +180,6 @@ Resources:
               KeyType: 'RANGE'
           Projection:
             ProjectionType: 'ALL'
-        - IndexName: 'ShopIndex'
-          KeySchema:
-            - AttributeName: 'status'
-              KeyType: 'RANGE'
-          Projection:
-            ProjectionType: 'ALL'
 
   RequestTable:
     Type: 'AWS::DynamoDB::Table'
@@ -165,7 +190,7 @@ Resources:
           AttributeType: 'S'
         - AttributeName: 'batchId'
           AttributeType: 'S'
-        - AttributeName: 'item'
+        - AttributeName: 'itemId'
           AttributeType: 'S'
         - AttributeName: 'status'
           AttributeType: 'S'
@@ -174,7 +199,7 @@ Resources:
       KeySchema:
         - AttributeName: 'requestId'
           KeyType: 'HASH'
-        - AttributeName: 'item'
+        - AttributeName: 'itemId'
           KeyType: 'RANGE'
       BillingMode: PAY_PER_REQUEST
       GlobalSecondaryIndexes:
@@ -186,14 +211,55 @@ Resources:
               KeyType: 'RANGE'
           Projection:
             ProjectionType: 'ALL'
-        - IndexName: 'ItemStatusIndex'
+        - IndexName: 'ItemIdStatusIndex'
           KeySchema:
-            - AttributeName: 'item'
+            - AttributeName: 'itemId'
               KeyType: 'HASH'
             - AttributeName: 'status'
               KeyType: 'RANGE'
           Projection:
             ProjectionType: 'ALL'
+
+  # ====================== StepFunctions
+  IntegrationStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "/aws/vendedlogs/states/integrationStateMachine-Logs"
+
+  StateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: integrationStateMachine
+      StateMachineType: EXPRESS
+      LoggingConfiguration:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt IntegrationStateMachineLogGroup.Arn
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "State machine for process tasks",
+          "StartAt": "ProcessTask1",
+          "States": {
+            "ProcessTask1": {
+              "Type": "Task",
+              "Resource": "${ProcessTask1Lambda.Arn}",
+              "Next": "ProcessTask2"
+            },
+            "ProcessTask2": {
+              "Type": "Task",
+              "Resource": "${ProcessTask2Lambda.Arn}",
+              "Next": "UpdateBatch"
+            },
+            "UpdateBatch": {
+              "Type": "Task",
+              "Resource": "${UpdateBatchLambda.Arn}",
+              "End": true
+            }
+          }
+        }
 
   # ====================== IAM Roles
 
@@ -216,6 +282,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - states:StartExecution
+                Resource: !Ref StateMachine
+              - Effect: Allow
+                Action:
                   - dynamodb:ListTables
                   - dynamodb:BatchGetItem
                   - dynamodb:BatchWriteItem
@@ -229,6 +299,87 @@ Resources:
                 Resource: 
                   - !GetAtt BatchTable.Arn
                   - !GetAtt RequestTable.Arn
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  UpdateBatchLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: UpdateBatchPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:ListTables
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: 
+                  - !GetAtt BatchTable.Arn
+                  - !GetAtt RequestTable.Arn
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/BatchTable/index/StatusIndex"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/RequestTable/index/BatchIdIndex"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/RequestTable/index/ProductStatusIndex"
+
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ProcessTask1Lambda.Arn
+                  - !GetAtt ProcessTask2Lambda.Arn
+                  - !GetAtt UpdateBatchLambda.Arn
+        - PolicyName: CloudWatchLogsFullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                  - cloudwatch:GenerateQuery
+                Resource: "*"
 
   ApiGatewayCloudWatchRole:
     Type: AWS::IAM::Role

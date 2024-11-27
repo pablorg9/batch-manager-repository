@@ -25,7 +25,7 @@ export const handler = async (event) => {
                     currentBatch: 1,
                     batchSize: batchSize,
                     totalBatch: Math.ceil(totalItems / batchSize),
-                    failedRequestSkus: [],
+                    failedRequestItems: [],
                     totalFailedItems: 0,
                     totalSuccessItems: 0,
                     status: 'RUNNING',

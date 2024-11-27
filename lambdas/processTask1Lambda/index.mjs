@@ -1,3 +1,6 @@
 export const handler = async (event) => {
-    return event
+    return {
+        ...event,
+        failedItems: []
+    }
 };
